@@ -1,3 +1,4 @@
+import os
 from typing import Optional, Union
 from matplotlib import pyplot as plt
 import numpy as np
@@ -8,6 +9,9 @@ from torch.distributions import Categorical
 from torch.utils.data import BatchSampler, SequentialSampler
 from vit_pytorch import SimpleViT
 from env_test import SimEnv
+import torch._dynamo
+
+# torch._dynamo.config.suppress_errors = True
 
 
 # 位置编码层
@@ -34,13 +38,13 @@ class TransFormerMy(nn.Module):
     def __init__(self):
         super(TransFormerMy, self).__init__()
 
-        self.embedding = nn.Linear(2, 50)
-        self.pos_encoding = PositionalEncoding(50)
+        self.embedding = nn.Linear(2, 256)
+        self.pos_encoding = PositionalEncoding(256)
         self.encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(50, 10, 20, 0.1, batch_first=True), 6
+            nn.TransformerEncoderLayer(256, 8, 1024, 0.1, batch_first=True), 16
         )
-        self.fc1 = nn.Linear(50, 3)
-        self.fc2 = nn.Linear(50, 1)
+        self.fc1 = nn.Linear(256, 3)
+        self.fc2 = nn.Linear(256, 1)
 
     def forward(self, x: torch.Tensor, src_mask=None):
         x = self.embedding(x)
@@ -55,26 +59,29 @@ class TransFormerMy(nn.Module):
 
 
 class PPOMemory:
-    def __init__(self, batch_size, agv_num: int, max_path_length=100):
+    def __init__(self, batch_size: int, agv_num: int, device, max_path_length=100):
+        self.device = device
         # 每个的路径
         self.paths = np.zeros((batch_size, agv_num, max_path_length, 2))
-        self.path_masks = np.zeros((batch_size, agv_num, max_path_length))
+        self.path_masks = np.zeros(
+            (batch_size, agv_num, max_path_length), dtype=bool
+        )
         self.maps = np.zeros((batch_size, 128, 128))
-        self.actions = np.zeros((batch_size, agv_num, max_path_length))
+        self.actions = np.zeros((batch_size, agv_num, max_path_length), dtype=np.int8)
         self.action_log_probs = np.zeros((batch_size, agv_num, max_path_length))
         self.values = np.zeros(batch_size)
         self.rewards = np.zeros(batch_size)
-        self.dones = np.zeros(batch_size)
+        self.dones = np.zeros(batch_size, dtype=np.int8)
         self.count = 0
 
     def remember(self, state, masks, action, action_log_prob, value, reward, done):
-        #print("jiyi",self.count)
+        # print("jiyi",self.count)
         self.paths[self.count] = state
         self.path_masks[self.count] = masks
-        self.actions[self.count] = action.numpy()
-        self.action_log_probs[self.count] = action_log_prob.numpy()
+        self.actions[self.count] = action
+        self.action_log_probs[self.count] = action_log_prob
         # print(type(value), value.shape)
-        self.values[self.count] = value.numpy()
+        self.values[self.count] = value
         self.rewards[self.count] = reward
         self.dones[self.count] = done
         self.count += 1
@@ -82,24 +89,24 @@ class PPOMemory:
     def generate_batches(
         self,
     ) -> tuple[
-        np.ndarray,
-        np.ndarray,
-        np.ndarray,
         torch.Tensor,
         torch.Tensor,
-        np.ndarray,
-        np.ndarray,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
     ]:
-        
+
         self.count = 0
         return (
-            self.paths,
-            self.path_masks,
-            self.actions,
-            torch.from_numpy(self.action_log_probs).float(),
-            torch.from_numpy(self.values).float(),
-            self.rewards,
-            self.dones,
+            torch.from_numpy(self.paths).float().to(self.device),
+            torch.from_numpy(self.path_masks).bool().to(self.device),
+            torch.from_numpy(self.actions).float().to(self.device),
+            torch.from_numpy(self.action_log_probs).float().to(self.device),
+            torch.from_numpy(self.values).float().to(self.device),
+            torch.from_numpy(self.rewards).float().to(self.device),
+            torch.from_numpy(self.dones).to(self.device),
         )
 
 
@@ -108,6 +115,7 @@ class PPOAgent:
         self,
         model: torch.nn.Module,
         memory: PPOMemory,
+        device: torch.device,
         lr=0.001,
         gamma=0.99,
         eps_clip=0.2,
@@ -120,12 +128,11 @@ class PPOAgent:
         self.entropy_coef = 0.01
         self.batch_size = 16
         self.mini_batch_size = 1
-        self.epochs = 8
+        self.epochs = 16
         # 第二个参数是agv数量
         self.memory = memory
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.device = torch.device("cpu")
-        self.model = model.to(self.device)
+        self.model = model
+        self.device = device
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=self.actor_lr)
 
     def select_action(
@@ -134,9 +141,9 @@ class PPOAgent:
         path_mask: Union[torch.Tensor, np.ndarray],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if type(state) == np.ndarray:
-            state = torch.from_numpy(state).float()
+            state = torch.from_numpy(state).float().to(self.device)
         if type(path_mask) == np.ndarray:
-            path_mask = torch.from_numpy(path_mask).bool()
+            path_mask = torch.from_numpy(path_mask).bool().to(self.device)
         probs, _ = self.model(state, path_mask)
         action_dists = Categorical(probs)
         actions = action_dists.sample()
@@ -148,11 +155,11 @@ class PPOAgent:
         self,
         state: Union[torch.Tensor, np.ndarray],
         path_mask: Union[torch.Tensor, np.ndarray],
-    ):
+    ) -> torch.Tensor:
         if type(state) == np.ndarray:
-            state = torch.from_numpy(state).float()
+            state = torch.from_numpy(state).float().to(self.device)
         if type(path_mask) == np.ndarray:
-            path_mask = torch.from_numpy(path_mask).bool()
+            path_mask = torch.from_numpy(path_mask).bool().to(self.device)
         _, value = self.model(state, path_mask)
         return value
 
@@ -165,7 +172,6 @@ class PPOAgent:
         )
         with torch.no_grad():
             last_value = self.get_value(last_state, last_path_mask)
-            rewards = torch.from_numpy(rewards).float()
             advantages = torch.zeros_like(rewards, dtype=torch.float32)
             for t in reversed(range(self.batch_size)):
                 last_gae_lam = 0
@@ -194,9 +200,9 @@ class PPOAgent:
             for index in BatchSampler(
                 SequentialSampler(range(self.batch_size)), self.mini_batch_size, False
             ):
-                mini_states = torch.from_numpy(paths[index]).float().squeeze()
-                mini_masks = torch.from_numpy(path_masks[index]).bool().squeeze()
-                mini_probs = (action_log_probs[index]).squeeze()
+                mini_states: torch.Tensor = paths[index].squeeze()
+                mini_masks = path_masks[index].squeeze()
+                mini_probs = action_log_probs[index].squeeze()
                 actions, new_probs, entropy = self.select_action(
                     mini_states, mini_masks
                 )
@@ -208,61 +214,79 @@ class PPOAgent:
                 )
                 actor_loss = -torch.min(surr1, surr2) - self.entropy_coef * entropy
                 new_value: torch.Tensor = self.get_value(mini_states, mini_masks)
+                # print(returns[index].shape,new_value.shape)
+                # print(returns[index],new_value.unsqueeze_(0))
 
-                critic_loss = F.mse_loss(returns[index], new_value.mean())
+                critic_loss = F.mse_loss(returns[index], new_value.unsqueeze_(0))
                 total_loss = actor_loss.mean() + 0.5 * critic_loss
 
                 self.optimizer.zero_grad()
                 # print(total_loss.dtype)
                 total_loss.backward()
                 self.optimizer.step()
+        torch.save(self.model.state_dict(), "./model/model.pth")
 
 
 class Train:
     def __init__(self):
-        self.agv_num = 4
-        self.env = SimEnv(13, 13, 0.2, self.agv_num)
+        self.agv_num = 8
+        self.env = SimEnv(18, 18, 0.3, self.agv_num)
         self.env.init()
         self.paths, self.path_masks, self.done, self.reward = self.env.get_state()
         self.batch_size = 16
         self.epochs = 10
         self.model = TransFormerMy()
-        self.memory = PPOMemory(self.batch_size, self.agv_num)
-        self.agent = PPOAgent(self.model, self.memory)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        name = "./model/model.pth"
+        if os.path.exists(name):
+            model_param = torch.load("./model/model.pth")
+            self.model.load_state_dict(model_param)
+        # self.model = torch.compile(self.model)
+        self.model.to(self.device)
+        self.memory = PPOMemory(self.batch_size, self.agv_num, self.device)
+        self.agent = PPOAgent(self.model, self.memory, self.device)
         self.step_num = 0
 
     def step(self):
         self.model.eval()
         with torch.no_grad():
-            #print(self.paths, self.path_masks)
+            # print(self.paths, self.path_masks)
             actions, log_prob, entropy = self.agent.select_action(
                 self.paths, self.path_masks
             )
             value = self.agent.get_value(self.paths, self.path_masks)
-        pos = self.env.update(actions.numpy())
+        pos = self.env.update(actions.cpu().numpy())
         next_paths, next_path_masks, done, reward = self.env.get_state()
-        self.env.show(self.agv_num, pos)
+        # self.env.show(self.agv_num, pos)
         # plt.show()
         # plt.pause(1)
         self.memory.remember(
-            self.paths, self.path_masks, actions, log_prob, value, reward, done
+            self.paths,
+            self.path_masks,
+            actions.cpu().numpy(),
+            log_prob.cpu().numpy(),
+            value.cpu().numpy(),
+            reward,
+            done,
         )
         self.paths = next_paths
         self.path_masks = next_path_masks
         self.done = done
+        return reward
 
     def run(self):
-        for i in range(0, 1000):
+        for i in range(0, 512):
             print(i)
-            if i % self.batch_size == 1:
+            if i % self.batch_size == 15:
                 self.agent.learn(self.paths, self.path_masks, self.done)
-            self.step()
+            reward = self.step()
+            print(reward)
             self.step_num += 1
 
 
 if __name__ == "__main__":
-    torch.manual_seed(42)
-    np.random.seed(42)
+    torch.manual_seed(3407)
+    # np.random.seed(3407)
     """ 
     v = SimpleViT(
         channels=1,

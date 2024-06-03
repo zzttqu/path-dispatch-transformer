@@ -16,10 +16,8 @@ class SimEnv:
         self.position = []
         # 50个agv的路线，最长100个节点
         self.max_path_length = 100
-        self.dstar_path: np.ndarray = np.full(
-            (agv_num, self.max_path_length, 2), -1
-        )
-        self.path_mask = np.ones((agv_num, 100), dtype=bool)
+        self.dstar_path: np.ndarray = np.full((agv_num, self.max_path_length, 2), -1)
+        self.path_mask = np.ones((agv_num, 100), dtype=np.int8)
         self.distance = np.zeros(agv_num)
         self.turn_num = np.zeros(agv_num, dtype=np.int8)
         self.AGVs: list[DStarLite] = []
@@ -87,7 +85,7 @@ class SimEnv:
                     path = np.array([self.AGVs[i].start.x, self.AGVs[i].start.y])
                 self.dstar_path[i, : path.shape[0], :] = path
                 # 填充路径的mask
-                self.path_mask[i, : path.shape[0]] = False
+                self.path_mask[i, : path.shape[0]] = 0
                 # 填充位置信息
                 # self.dstar_path[i, path.shape[0] :, :] = path[-1, :]
                 self.turn_num[i] = turn_num
@@ -122,9 +120,10 @@ class SimEnv:
         for i in range(action.shape[0]):
             # i = tick_num
             tmp: np.ndarray = self.dstar_path[i][
-                np.where((action[i] == 1) & (~self.path_mask[i, : action[i].shape[0]]))[
-                    0
-                ]
+                np.where(
+                    (action[i] == 1)
+                    & (np.logical_not(self.path_mask[i, : action[i].shape[0]]))
+                )[0]
             ]
             tmp = tmp.astype(np.int8)
             if tmp.shape[0] > 0:
@@ -194,6 +193,8 @@ class SimEnv:
             self.done = 1
         # distance = 0
         reward = self.Dstar_reward - sum(distance) - sum(turn_num) / 10
+        if reward > -0.50:
+            reward = (1 + reward) * 10
         return reward
 
     def show(self, agv_num, obstacles_pos=[]):
@@ -251,10 +252,10 @@ if __name__ == "__main__":
     # print(env.distance)
     # print(env.time)
     # print(env.path_mask)
-    obstacles_pos = env.update()
+    # obstacles_pos = env.update()
     env.get_DStar_Path()
     print(env.get_state()[-1])
-    show(agv_num, env, obstacles_pos)
+    # show(agv_num, env, obstacles_pos)
     # print(obstacles_pos)
     plt.show()
     # print(env.get_reward())
