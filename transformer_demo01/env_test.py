@@ -5,11 +5,12 @@ from dstarlite import DStarLite, State
 
 
 class SimEnv:
-    def __init__(self, cols, rows, obstacle_radio, agv_num):
+    def __init__(self, cols, rows, obstacle_radio, agv_num, time=16):
         self.cols = cols
         self.rows = rows
         self.obstacle_radio = obstacle_radio
         self.grid_map = np.zeros((agv_num, rows, cols), dtype=np.int8)
+        self._grid_map = np.zeros((rows, cols), dtype=np.int8)
         self.grid_map_orgin = np.zeros((rows, cols), dtype=np.int8)
         self.start = np.zeros((agv_num, 2), dtype=np.int8)
         self.goal = np.zeros((agv_num, 2), dtype=np.int8)
@@ -17,7 +18,7 @@ class SimEnv:
         # 50个agv的路线，最长100个节点
         self.max_path_length = 100
         self.dstar_path: np.ndarray = np.full((agv_num, self.max_path_length, 2), -1)
-        self.path_mask = np.ones((agv_num, 100), dtype=np.int8)
+        self.path_mask = np.ones((agv_num, self.max_path_length), dtype=np.int8)
         self.distance = np.zeros(agv_num)
         self.turn_num = np.zeros(agv_num, dtype=np.int8)
         self.AGVs: list[DStarLite] = []
@@ -183,6 +184,21 @@ class SimEnv:
         返回D*路线，掩膜，是否结束，奖励
         """
         path_list, mask_list, distance, turn_num = self.get_DStar_Path()
+        assert isinstance(path_list, np.ndarray), "必须返回numpy数组"
+        # 第i个AGV的路径有这么多步
+        # p = np.broadcast_to(aa, (path_length, aa.shape[0], aa.shape[1]))
+        # aa = self.grid_map_orgin.copy()
+        aa = np.expand_dims(self.grid_map_orgin, axis=0)
+        path_length = self.max_path_length - mask_list[0].sum()
+        p = np.tile(aa, (path_length, 1, 1))
+        indice = (
+            np.arange(path_length),
+            path_list[0, :path_length, 0],
+            path_list[0, :path_length, 1],
+        )
+        p[indice] = 1
+        print(p)
+        print(self.max_path_length - mask_list[1].sum())
         reward = self.get_reward(distance, turn_num)
         return path_list, mask_list, self.done, reward
 
@@ -243,21 +259,21 @@ if __name__ == "__main__":
     tick_num = 3
     np.random.seed(52)
     agv_num = 10
-    env = SimEnv(51, 51, 0.3, agv_num)
+    env = SimEnv(5, 5, 0.3, agv_num)
     env.init()
     env.get_DStar_Path()
     print(env.get_state()[-1])
-    env.show(agv_num)
+    # env.show(agv_num)
     # print(env.dstar_path)
     # print(env.distance)
     # print(env.time)
     # print(env.path_mask)
     # obstacles_pos = env.update()
-    env.get_DStar_Path()
-    print(env.get_state()[-1])
+    # env.get_DStar_Path()
+    # print(env.get_state()[-1])
     # show(agv_num, env, obstacles_pos)
     # print(obstacles_pos)
-    plt.show()
+    # plt.show()
     # print(env.get_reward())
     plt.tight_layout()
     plt.savefig("./env_test.png", dpi=200)

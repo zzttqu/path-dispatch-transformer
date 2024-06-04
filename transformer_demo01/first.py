@@ -1,4 +1,5 @@
 import os
+import datetime
 from typing import Optional, Union
 from matplotlib import pyplot as plt
 import numpy as np
@@ -7,7 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 from torch.utils.data import BatchSampler, SequentialSampler
-from vit_pytorch import SimpleViT
+from vit_pytorch import SimpleViT, ViT
+from vit_pytorch.vivit import ViT
 from env_test import SimEnv
 import torch._dynamo
 
@@ -63,9 +65,7 @@ class PPOMemory:
         self.device = device
         # 每个的路径
         self.paths = np.zeros((batch_size, agv_num, max_path_length, 2))
-        self.path_masks = np.zeros(
-            (batch_size, agv_num, max_path_length), dtype=bool
-        )
+        self.path_masks = np.zeros((batch_size, agv_num, max_path_length), dtype=bool)
         self.maps = np.zeros((batch_size, 128, 128))
         self.actions = np.zeros((batch_size, agv_num, max_path_length), dtype=np.int8)
         self.action_log_probs = np.zeros((batch_size, agv_num, max_path_length))
@@ -275,7 +275,7 @@ class Train:
         return reward
 
     def run(self):
-        for i in range(0, 512):
+        for i in range(0, 2):
             print(i)
             if i % self.batch_size == 15:
                 self.agent.learn(self.paths, self.path_masks, self.done)
@@ -285,24 +285,32 @@ class Train:
 
 
 if __name__ == "__main__":
-    torch.manual_seed(3407)
-    # np.random.seed(3407)
-    """ 
-    v = SimpleViT(
-        channels=1,
-        image_size=256,
-        patch_size=32,
-        num_classes=100,
+    """ v = ViT(
+        image_size=64,  # image size
+        frames=8,  # number of frames
+        image_patch_size=16,  # image patch size
+        frame_patch_size=2,  # frame patch size
+        num_classes=3,
         dim=1024,
-        depth=6,
-        heads=16,
+        spatial_depth=6,  # depth of the spatial transformer
+        temporal_depth=6,  # depth of the temporal transformer
+        heads=4,
         mlp_dim=2048,
+        channels=1,
     )
 
-    img = torch.randn(1, 1, 256, 256)
-
-    preds = v(img)  # (1, 1000)
-    print(preds) """
+    video = torch.randn(4, 1, 8, 64, 64)  # (batch, channels, frames, height, width)
+    now = datetime.datetime.now()
+    print(now)
+    for _ in range(10):
+        preds = v(video)  # (4, 1000)
+        print(preds.shape)
+    print("time:", datetime.datetime.now() - now)
+    print(sum(p.numel() for p in v.parameters()))
+    raise SystemExit """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.manual_seed(3407)
+    # np.random.seed(3407)
     train = Train()
     train.run()
     raise SystemExit
