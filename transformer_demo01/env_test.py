@@ -200,13 +200,19 @@ class SimEnv:
         path_list, mask_list, distance, turn_num, max_path_length = (
             self.get_DStar_Path()
         )
-        
 
         assert isinstance(path_list, np.ndarray), "必须返回numpy数组"
         # 第i个AGV的路径有这么多步
         # p = np.broadcast_to(aa, (path_length, aa.shape[0], aa.shape[1]))
         # aa = self.grid_map_orgin.copy()
-        self.grid_video = np.zeros((self.agv_num,max_path_length,self.grid_map_orgin.shape[0],self.grid_map_orgin.shape[1]))
+        self.grid_video = np.zeros(
+            (
+                self.agv_num,
+                max_path_length,
+                self.grid_map_orgin.shape[0],
+                self.grid_map_orgin.shape[1],
+            )
+        )
         for agv in range(self.agv_num):
             aa = np.expand_dims(self.grid_map_orgin, axis=0).astype(np.float32)
             # path_length = self.max_path_length - mask_list[agv].sum()
@@ -224,7 +230,7 @@ class SimEnv:
                             step, path_list[_agv, step, 0], path_list[_agv, step, 1]
                         ] += 0.8
             # 大于1.0就说明两车处于同一位置，就说明相撞了
-            self.grid_video[agv]=p
+            self.grid_video[agv] = p
 
         """ indice = (
             np.arange(path_length),
@@ -232,9 +238,9 @@ class SimEnv:
             path_list[0, :path_length, 1],
         ) """
         # p[indice] = 0.5
-        if max_path_length<self.frame_num:
-           pass 
-        print(self.grid_video)
+        if max_path_length < self.frame_num:
+            pass
+        # print(self.grid_video)
         # print(self.max_path_length - mask_list[1].sum())
         reward = self.get_reward(distance, turn_num)
         return path_list, mask_list, self.done, reward
@@ -259,7 +265,7 @@ class SimEnv:
 
     def show(self, agv_num, obstacles_pos=[]):
         # plt.close("all")
-        fig, axs = plt.subplots(agv_num // 3 + 1, 3, figsize=(16, 9), dpi=100)
+        fig, axs = plt.subplots(agv_num // 3 + 1, 3, figsize=(16, 9), dpi=90)
         plt.tight_layout()
         # plt.clf()
         axs[-1, -1].imshow(
@@ -335,4 +341,4 @@ if __name__ == "__main__":
     plt.show()
     # print(env.get_reward())
     plt.tight_layout()
-    plt.savefig("./env_test.png", dpi=200)
+    plt.savefig("./env_test.png", dpi=90)

@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 from torch.utils.data import BatchSampler, SequentialSampler
 from vit_pytorch import SimpleViT, ViT
-from vit_pytorch.vivit import ViT
+from vit_pytorch.vivit import ViT as VIVIT
 from env_test import SimEnv
 import torch._dynamo
 
@@ -37,25 +37,29 @@ class PositionalEncoding(nn.Module):
 
 
 class TransFormerMy(nn.Module):
-    def __init__(self):
+    def __init__(self,image_size,frames):
         super(TransFormerMy, self).__init__()
-
-        self.embedding = nn.Linear(2, 256)
-        self.pos_encoding = PositionalEncoding(256)
-        self.encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(256, 8, 1024, 0.1, batch_first=True), 16
+        self.vivit=VIVIT(
+        image_size=image_size,  # image size
+        frames=frames,  # number of frames
+        channels=1,
+        image_patch_size=16,  # image patch size
+        frame_patch_size=2,  # frame patch size
+        num_classes=24,
+        dim=1024,
+        spatial_depth=6,  # depth of the spatial transformer
+        temporal_depth=6,  # depth of the temporal transformer
+        heads=4,
+        mlp_dim=2048,
         )
-        self.fc1 = nn.Linear(256, 3)
-        self.fc2 = nn.Linear(256, 1)
+        self.fc1=nn.Linear(24,3)
+        self.fc2=nn.Linear(24,1)
 
-    def forward(self, x: torch.Tensor, src_mask=None):
-        x = self.embedding(x)
-        if src_mask is not None:
-            x.masked_fill_(src_mask.unsqueeze(-1), 0)
-        x = self.pos_encoding(x)
-        x = self.encoder(x, src_key_padding_mask=src_mask)
+    def forward(self, x: torch.Tensor):
+        x=self.vivit(x)
         action = self.fc1(x)
-        action = torch.softmax(action, dim=2)
+        print(action.shape)
+        action = torch.softmax(action, dim=1)
         value: torch.Tensor = torch.mean(self.fc2(x))
         return action, value
 
@@ -144,7 +148,7 @@ class PPOAgent:
             state = torch.from_numpy(state).float().to(self.device)
         if type(path_mask) == np.ndarray:
             path_mask = torch.from_numpy(path_mask).bool().to(self.device)
-        probs, _ = self.model(state, path_mask)
+        probs, _ = self.model(state)
         action_dists = Categorical(probs)
         actions = action_dists.sample()
         log_prob = action_dists.log_prob(actions)
@@ -235,7 +239,10 @@ class Train:
         self.paths, self.path_masks, self.done, self.reward = self.env.get_state()
         self.batch_size = 16
         self.epochs = 10
-        self.model = TransFormerMy()
+        self.model = TransFormerMy(32,8)
+        
+        video = torch.randn(4, 1, 8, 32,32)  # (batch, channels, frames, height, width)
+        self.model(video)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         name = "./model/model.pth"
         if os.path.exists(name):
@@ -310,6 +317,7 @@ if __name__ == "__main__":
     raise SystemExit """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(3407)
+    video = torch.randn(4, 1, 8, 64, 64)  # (batch, channels, frames, height, width)
     # np.random.seed(3407)
     train = Train()
     train.run()
