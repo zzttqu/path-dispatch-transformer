@@ -157,13 +157,13 @@ class DStarLite:
 
     def update_grid(self, new_grid, obstacles_pos=None, compute=True, update=True):
         self.grid = new_grid  # 更新网格地图
-        #need_to_reset = set()
+        # need_to_reset = set()
         self.k_m += self.heuristic(self.start, self.goal)
         if obstacles_pos is not None:
             for x, y in obstacles_pos:
                 state = self.get_state(x, y)
-                #state.g = float("inf")
-                #state.rhs = float("inf")
+                # state.g = float("inf")
+                # state.rhs = float("inf")
 
                 if update:
                     self.update_vertex(state)
@@ -195,6 +195,7 @@ class DStarLite:
         self.attempts = 0
 
     def find_path(self, need_compute=True) -> tuple[np.ndarray, float, int, int]:
+        # 最后返回的那位是错误值
         if need_compute:
             self.compute_shortest_path()  # 计算最短路径
         path = []
@@ -331,7 +332,7 @@ if __name__ == "__main__":
 
     # print(grid_np)
     dstar = DStarLite(start, goal, maze)  # 创建DStarLite实例
-    path, _, _,_ = dstar.find_path()  # 计算路径
+    path, _, _, _ = dstar.find_path()  # 计算路径
     print("路径:", path)  # 输出路径
     fig, ax = plt.subplots()
     ax.imshow(maze.T, cmap="gray_r", origin="lower", interpolation="nearest")
