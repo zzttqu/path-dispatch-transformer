@@ -76,7 +76,7 @@ class TransFormerMy(nn.Module):
             heads=4,
             mlp_dim=1024,
         ) """
-        self.fc1 = nn.Linear(output // frame_patch_size, 2)
+        self.fc1 = nn.Linear(output // frame_patch_size, 3)
         self.fc2 = nn.Linear(output // frame_patch_size, 1)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -317,9 +317,9 @@ class Train:
             actions, log_prob, entropy = self.agent.select_action(self.paths)
             value = self.agent.get_value(self.paths)
         # logger.info(f"action:形状{actions.shape}")
-        pos = self.env.update(actions.cpu().numpy())
+        obs_pos, stop_pos = self.env.update(actions.cpu().numpy())
         next_paths, done, reward = self.env.get_state()
-        # self.env.show(axs, pos)
+        # self.env.show(axs, obs_pos, stop_pos)
         # logger.info(next_paths.shape)
         # self.env.show(self.agv_num, pos)
         # plt.show()
@@ -337,7 +337,7 @@ class Train:
         return reward
 
     def run(self, axs):
-        for i in range(0, 1):
+        for i in range(0, 512):
             if i % self.batch_size == self.batch_size - 1:
                 self.agent.learn(self.paths, self.done)
             reward = self.step(axs)
@@ -348,62 +348,62 @@ class Train:
 if __name__ == "__main__":
     plt.rcParams["font.sans-serif"] = ["SimHei"]
     plt.rcParams["axes.unicode_minus"] = False
-    # region
-    vv = ViT(
-        image_size=64,  # image size
-        frames=64,  # number of frames
-        image_patch_size=16,  # image patch size
-        frame_patch_size=4,  # frame patch size
-        num_classes=3,
-        dim=1024,
-        heads=4,
-        mlp_dim=2048,
-        channels=1,
-        depth=6,
-    ).cuda()
-    vvv = SimpleViT(
-        image_size=64,  # image size
-        frames=64,  # number of frames
-        image_patch_size=16,  # image patch size
-        frame_patch_size=4,  # frame patch size
-        num_classes=3,
-        dim=1024,
-        heads=4,
-        mlp_dim=2048,
-        channels=1,
-        depth=6,
-    ).cuda()
-    v = VIVIT(
-        image_size=64,  # image size
-        frames=64,  # number of frames
-        image_patch_size=16,  # image patch size
-        frame_patch_size=1,  # frame patch size
-        num_classes=3,
-        dim=1024,
-        spatial_depth=6,  # depth of the spatial transformer
-        temporal_depth=6,  # depth of the temporal transformer
-        heads=4,
-        mlp_dim=2048,
-        channels=1,
-    ).cuda()
+    # # region
+    # vv = ViT(
+    #     image_size=64,  # image size
+    #     frames=64,  # number of frames
+    #     image_patch_size=16,  # image patch size
+    #     frame_patch_size=4,  # frame patch size
+    #     num_classes=3,
+    #     dim=1024,
+    #     heads=4,
+    #     mlp_dim=2048,
+    #     channels=1,
+    #     depth=6,
+    # ).cuda()
+    # vvv = SimpleViT(
+    #     image_size=64,  # image size
+    #     frames=64,  # number of frames
+    #     image_patch_size=16,  # image patch size
+    #     frame_patch_size=4,  # frame patch size
+    #     num_classes=3,
+    #     dim=1024,
+    #     heads=4,
+    #     mlp_dim=2048,
+    #     channels=1,
+    #     depth=6,
+    # ).cuda()
+    # v = VIVIT(
+    #     image_size=64,  # image size
+    #     frames=64,  # number of frames
+    #     image_patch_size=16,  # image patch size
+    #     frame_patch_size=1,  # frame patch size
+    #     num_classes=3,
+    #     dim=1024,
+    #     spatial_depth=6,  # depth of the spatial transformer
+    #     temporal_depth=6,  # depth of the temporal transformer
+    #     heads=4,
+    #     mlp_dim=2048,
+    #     channels=1,
+    # ).cuda()
 
-    video = torch.randn(
-        4, 1, 8, 64, 64
-    ).cuda()  # (batch, channels, frames, height, width)
-    now = datetime.datetime.now()
-    logger.info(now)
-    for _ in range(10):
-        # preds = v(video)  # (4, 1000)
-        # preds = vv(video)  # (4, 1000)
-        preds = vvv(video)  # (4, 1000)
-        # print(preds.shape)
-    logger.info(f"time:{datetime.datetime.now() - now}")
-    logger.info(sum(p.numel() for p in v.parameters()))
-    logger.info(sum(p.numel() for p in vv.parameters()))
-    logger.info(sum(p.numel() for p in vvv.parameters()))
-    # endregion
-    # raise SystemExit
-    # fig, axs = plt.subplots(8 // 3 + 1, 3, figsize=(16, 9), dpi=90)
+    # video = torch.randn(
+    #     4, 1, 8, 64, 64
+    # ).cuda()  # (batch, channels, frames, height, width)
+    # now = datetime.datetime.now()
+    # logger.info(now)
+    # for _ in range(10):
+    #     # preds = v(video)  # (4, 1000)
+    #     # preds = vv(video)  # (4, 1000)
+    #     preds = vvv(video)  # (4, 1000)
+    #     # print(preds.shape)
+    # logger.info(f"time:{datetime.datetime.now() - now}")
+    # logger.info(sum(p.numel() for p in v.parameters()))
+    # logger.info(sum(p.numel() for p in vv.parameters()))
+    # logger.info(sum(p.numel() for p in vvv.parameters()))
+    # # endregion
+    # # raise SystemExit
+    # # fig, axs = plt.subplots(8 // 3 + 1, 3, figsize=(16, 9), dpi=90)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(3407)

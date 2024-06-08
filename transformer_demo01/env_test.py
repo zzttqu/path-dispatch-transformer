@@ -17,10 +17,10 @@ class SimEnv:
         self.goal = np.zeros((agv_num, 2), dtype=np.int8)
         self.position = []
         # 50个agv的路线，最长100个节点
-        self.max_path_length = 128
-        self.dstar_path: np.ndarray = np.full((agv_num, self.max_path_length, 2), -1)
+        self.path_length_limit = 128
+        self.dstar_path: np.ndarray = np.full((agv_num, self.path_length_limit, 2), -1)
         self.path_length: np.ndarray = np.zeros((agv_num), dtype=np.int8)
-        self.path_mask = np.ones((agv_num, self.max_path_length), dtype=np.int8)
+        self.path_mask = np.ones((agv_num, self.path_length_limit), dtype=np.int8)
         self.distance = np.zeros(agv_num)
         self.turn_num = np.zeros(agv_num, dtype=np.int8)
         self.AGVs: list[DStarLite] = []
@@ -40,6 +40,7 @@ class SimEnv:
         self.max_episode_step = 100
         self.Dstar_reward = 0
         self.reward = 0
+        self.done = 0
 
     def generate_maze(self):
         # 设置起点
@@ -81,6 +82,7 @@ class SimEnv:
         self.first_step()
 
     def first_step(self):
+        self.update()
         _, _, reward = self.get_state()
         self.Dstar_reward = reward
 
@@ -97,8 +99,8 @@ class SimEnv:
                 if path_length > max_path_length:
                     max_path_length = path_length
                 self.distance[i] = distance
-                if path.shape[0] > self.max_path_length:
-                    path = path[: self.max_path_length]
+                if path.shape[0] > self.path_length_limit:
+                    path = path[: self.path_length_limit]
                 elif path.shape[0] == 0:
                     path = np.array([self.AGVs[i].start.x, self.AGVs[i].start.y])
                 self.dstar_path[i, :path_length, :] = path
@@ -122,65 +124,106 @@ class SimEnv:
 
         return (self.dstar_path, self.distance, self.turn_num, max_path_length)
 
-    def update(self, action: np.ndarray):
+    def update(self, action: Optional[np.ndarray] = None):
         """
         arg 动作
 
         返回障碍物位置
         """
         self.episode_step += 1
-        """ action = np.array(
-            [[0, 1, 1, 0], [0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 1, 0], [0, 0, 1, 0]],
-            dtype=np.int8,
-        ) """
+        if action is None:
+            action = np.zeros((self.agv_num, self.max_frame_num))
+            self.episode_step -= 1
         obstacles_pos = []
+        stop_pos = []
+        tmp_stop = np.zeros((self.agv_num, self.max_frame_num), dtype=np.int8)
         # print("33", action[3], ~self.path_mask[3, : action[3].shape[0]])
         # print(np.where((action[3] == 1) & (~self.path_mask[3, : action[3].shape[0]]))[0])
         # self.AGVs[2].visualize()
         self.grid_map[:] = self.grid_map_orgin
-        for i in range(action.shape[0]):
+        for i in range(self.agv_num):
             # i = tick_num
             tmp_obstacle: np.ndarray = self.dstar_path[i][
                 np.where((action[i, : self.path_length[i]] == 1))[0]
             ]
-            tmp_stop: np.ndarray = self.dstar_path[i][
-                np.where(action[i, : self.path_length[i]] == 2)
-            ]
+            _tmp_stop: np.ndarray = np.where(action[i, : self.path_length[i]] == 2)[0]
+
+            # _full_size_tmp_obs = np.full(self.max_frame_num, tmp_obstacle[-1])
+            #  找到哪些时刻停下了
+            _tmp_stop = _tmp_stop.astype(np.int8)
+            group_number = 0
+            for frame in range(self.max_frame_num):
+                if frame in _tmp_stop:
+                    group_number += 1
+                    # 把停止位置的坐标设置为group_number
+                # 0的时候减一就会报错，所以0位置保持不变
+                if frame == 0:
+                    continue
+                tmp_stop[i, frame] = group_number
             tmp_obstacle = tmp_obstacle.astype(np.int8)
+            # 筛选出所有的障碍物坐标，排除起点和终点
             if tmp_obstacle.shape[0] > 0:
                 mask = np.any(tmp_obstacle != self.start[i], axis=1) & np.any(
                     tmp_obstacle != self.goal[i], axis=1
                 )
                 tmp_obstacle = tmp_obstacle[mask]
-                """ mask = np.any(tmp != self.goal[i], axis=1)
-                tmp = tmp[mask] """
-
-            """ for row in tmp:
-                if np.array_equal(row, self.start[i]):
-                    np.delete(tmp, row)
-                    print("shabi2")
-                if np.array_equal(row, self.goal[i]):
-                    np.delete(tmp, row)
-                    print("shabi1") """
             self.grid_map[i][tmp_obstacle[:, 0], tmp_obstacle[:, 1]] = 1
             obstacles_pos.append(tmp_obstacle)
+            stop_pos.append(self.dstar_path[i][_tmp_stop])
             # print(i)
-            """ self.AGVs[tick_num].update_grid(self.grid_map[tick_num], obstacles_pos)
-            self.AGVs[tick_num].visualize()
-            self.AGVs[tick_num].update_grid(
-                self.grid_map[tick_num], obstacles_pos, update=False
-            )
-            self.AGVs[tick_num].visualize()
-            break
- """
             # 重新初始化
             self.AGVs[i] = DStarLite(self.start[i], self.goal[i], self.grid_map[i])
             # self.AGVs[i].update_grid(self.grid_map[i], tmp, compute=False)
             # self.AGVs[i].update_grid(self.grid_map[i], obstacles_pos, compute=False)
             # print(i)
             # self.AGVs[i].visualize()
-            ########path, distance, turn_num = self.AGVs[i].find_path()
-            ########self.dstar_path[i, : path.shape[0], :] = path
+        path_list, distance, turn_num, max_path_length = self.get_DStar_Path()
+        assert isinstance(path_list, np.ndarray), "必须返回numpy数组"
+        # logger.info(tmp_stop)
+        for step in range(max_path_length):
+            for agv in range(self.agv_num):
+                aa = self.grid_map_orgin[:].astype(np.float32)
+                for _agv in range(self.agv_num):
+                    # 当这个agv等于他自己的时候，要设置为0.5，突出特点
+                    if _agv == agv:
+                        aa[
+                            path_list[_agv, step - tmp_stop[_agv, step], 0],
+                            path_list[_agv, step - tmp_stop[_agv, step], 1],
+                        ] += 0.5
+                    else:
+                        aa[
+                            path_list[_agv, step - tmp_stop[_agv, step], 0],
+                            path_list[_agv, step - tmp_stop[_agv, step], 1],
+                        ] += 0.8
+                # 大于1.0就说明两车处于同一位置，就说明相撞了
+                self.grid_video[agv, 0, step] = aa
+        if action is None:
+            self.Dstar_reward: float = self.get_reward(
+                distance, self.grid_video, turn_num
+            )
+        else:
+            self.reward: float = self.get_reward(distance, self.grid_video, turn_num)
+        # for agv in range(self.agv_num):
+        #     aa = np.expand_dims(self.grid_map_orgin, axis=0).astype(np.float32)
+        #     # path_length = self.max_path_length - mask_list[agv].sum()
+        #     p = np.tile(aa, (self.max_frame_num, 1, 1))
+        #     # p[:, path_coords[:, 0], path_coords[:, 1]] = 0.5
+        #     for step in range(max_path_length):
+        #         logger.info(f"{tmp_stop[agv,step]}")
+        #         for p in tmp_stop:
+        #             pass
+        #         for _agv in range(self.agv_num):
+        #             # 当这个agv等于他自己的时候，要设置为0.5，突出特点
+        #             if _agv == agv:
+        #                 p[
+        #                     step, path_list[_agv, step, 0], path_list[_agv, step, 1]
+        #                 ] += 0.5
+        #             else:
+        #                 p[
+        #                     step, path_list[_agv, step, 0], path_list[_agv, step, 1]
+        #                 ] += 0.8
+        #     # 大于1.0就说明两车处于同一位置，就说明相撞了
+        #     self.grid_video[agv, 0] = p
         # self.AGVs[tick_num].visualize()
         # path, distance, turn_num = self.AGVs[tick_num].find_path()
         # self.dstar_path[tick_num, : path.shape[0], :] = path
@@ -193,7 +236,7 @@ class SimEnv:
         # self.get_DStar_Path()
         # self.grid_map[i][tmp] = 1
         #
-        return obstacles_pos
+        return obstacles_pos, stop_pos
         # 遇到障碍物就停下不更新位置
         """ if self.grid_map[action[0]] == 1:
             return
@@ -203,63 +246,32 @@ class SimEnv:
         """
         返回D*路线，掩膜，是否结束，奖励
         """
-        path_list, distance, turn_num, max_path_length = self.get_DStar_Path()
 
-        assert isinstance(path_list, np.ndarray), "必须返回numpy数组"
-        # 第i个AGV的路径有这么多步
-        # p = np.broadcast_to(aa, (path_length, aa.shape[0], aa.shape[1]))
-        # aa = self.grid_map_orgin.copy()
-        for agv in range(self.agv_num):
-            aa = np.expand_dims(self.grid_map_orgin, axis=0).astype(np.float32)
-            # path_length = self.max_path_length - mask_list[agv].sum()
-            p = np.tile(aa, (self.max_frame_num, 1, 1))
-            # p[:, path_coords[:, 0], path_coords[:, 1]] = 0.5
-            for step in range(max_path_length):
-                for _agv in range(self.agv_num):
-                    # 当这个agv等于他自己的时候，要设置为0.5，突出特点
-                    if _agv == agv:
-                        p[
-                            step, path_list[_agv, step, 0], path_list[_agv, step, 1]
-                        ] += 0.5
-                    else:
-                        p[
-                            step, path_list[_agv, step, 0], path_list[_agv, step, 1]
-                        ] += 0.8
-            # 大于1.0就说明两车处于同一位置，就说明相撞了
-            self.grid_video[agv, 0] = p
-        # p[indice] = 0.5
-        # TODO 需要判断frame_num的数量，下次是否需要更新
-        if max_path_length < self.max_frame_num:
-            pass
-        # print(self.grid_video)
-        # print(self.max_path_length - mask_list[1].sum())
-        reward: float = self.get_reward(distance, turn_num)
+        return self.grid_video, self.done, self.reward
 
-        return self.grid_video, self.done, reward
-
-    def get_reward(self, distance, turn_num) -> float:
+    def get_reward(self, video, distance, turn_num) -> float:
         self.done = 0
         self.episode_step += 1
         if self.episode_step >= self.max_episode_step:
             self.done = 1
         # distance = 0
-        reward = -sum(distance) - sum(turn_num) / 10
+        reward = -np.sum(distance) - np.sum(turn_num) / 10
         # TODO 这里可以优化为numpy
         conflict_num = []
         for frame in self.grid_video:
             filtered_elements = frame[(frame > 1.1)]
             conflict_num.append(np.sum(filtered_elements))
         # 出现路径冲突就扣分
-        reward -= max(conflict_num) * 4
-        logger.warning(f"冲突次数:{max(conflict_num):.2f}")
+        reward -= max(conflict_num)
+        logger.warning(f"冲突次数:{max(conflict_num)/1.3:.2f}")
         # 因为这两个都是负数
         reward = reward - self.Dstar_reward
         if reward > -0.50:
-            reward = (1 + reward) * 10
+            reward = (1 + reward) * 5
 
         return reward
 
-    def show(self, axs=None, obstacles_pos=[]):
+    def show(self, axs=None, obstacles_pos=[], stop_pos=[]):
         agv_num = self.agv_num
         # plt.close("all")
         if axs is None:
@@ -293,6 +305,11 @@ class SimEnv:
                 for obs_p in obstacles_pos[i]:
                     axs[i // 3, i % 3].scatter(
                         obs_p[0], obs_p[1], color="red", marker="x", s=100
+                    )
+            if stop_pos and i < len(stop_pos) and len(stop_pos[i]) != 0:
+                for stop_p in stop_pos[i]:
+                    axs[i // 3, i % 3].scatter(
+                        stop_p[0], stop_p[1], color="blue", marker="x", s=100
                     )
             axs[i // 3, i % 3].text(
                 self.start[i][0],
