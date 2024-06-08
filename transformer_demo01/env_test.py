@@ -2,30 +2,40 @@ from typing import Optional
 from matplotlib import pyplot as plt
 import numpy as np
 from dstarlite import DStarLite, State
+from loguru import logger
 
 
 class SimEnv:
-    def __init__(self, cols, rows, obstacle_radio, agv_num, time=16, frame_num=8):
+    def __init__(self, cols, rows, obstacle_radio, agv_num, max_frame_num=128):
         self.cols = cols
         self.rows = rows
         self.obstacle_radio = obstacle_radio
+        self.agv_num = agv_num
         self.grid_map = np.zeros((agv_num, rows, cols), dtype=np.int8)
-        self._grid_map = np.zeros((rows, cols), dtype=np.int8)
         self.grid_map_orgin = np.zeros((rows, cols), dtype=np.int8)
         self.start = np.zeros((agv_num, 2), dtype=np.int8)
         self.goal = np.zeros((agv_num, 2), dtype=np.int8)
         self.position = []
         # 50个agv的路线，最长100个节点
-        self.max_path_length = 100
+        self.max_path_length = 128
         self.dstar_path: np.ndarray = np.full((agv_num, self.max_path_length, 2), -1)
+        self.path_length: np.ndarray = np.zeros((agv_num), dtype=np.int8)
         self.path_mask = np.ones((agv_num, self.max_path_length), dtype=np.int8)
         self.distance = np.zeros(agv_num)
         self.turn_num = np.zeros(agv_num, dtype=np.int8)
         self.AGVs: list[DStarLite] = []
         # 视频帧数
-        self.frame_num = frame_num
-        self.grid_video = []
-        self.agv_num = agv_num
+        self.max_frame_num = max_frame_num
+        self.grid_video = np.zeros(
+            (
+                self.agv_num,
+                1,
+                max_frame_num,
+                self.grid_map_orgin.shape[0],
+                self.grid_map_orgin.shape[1],
+            )
+        )
+
         self.episode_step = 0
         self.max_episode_step = 100
         self.Dstar_reward = 0
@@ -71,29 +81,31 @@ class SimEnv:
         self.first_step()
 
     def first_step(self):
-        _, _, distance, turn_num, _ = self.get_DStar_Path()
-
-        self.Dstar_reward = sum(distance) + sum(turn_num) / 10
+        _, _, reward = self.get_state()
+        self.Dstar_reward = reward
 
     def get_DStar_Path(self):
         """
         返回路径，掩膜，距离，转向次数
         """
-        path_list_length_list = []
+        max_path_length = 0
         for i in range(self.agv_num):
             path, distance, turn_num, err = self.AGVs[i].find_path()
             if err == 0:
-                path_list_length = path.shape[0]
-                path_list_length_list.append(path_list_length)
+                path_length = path.shape[0]
+                self.path_length[i] = path_length
+                if path_length > max_path_length:
+                    max_path_length = path_length
                 self.distance[i] = distance
                 if path.shape[0] > self.max_path_length:
                     path = path[: self.max_path_length]
                 elif path.shape[0] == 0:
                     path = np.array([self.AGVs[i].start.x, self.AGVs[i].start.y])
-                self.dstar_path[i, :path_list_length, :] = path
-                self.dstar_path[i, path_list_length:, :] = path[-1]
+                self.dstar_path[i, :path_length, :] = path
+                # 把最后停止位置保持到最后一位
+                self.dstar_path[i, path_length:, :] = path[-1]
                 # 填充路径的mask
-                self.path_mask[i, :path_list_length] = 0
+                self.path_mask[i, :path_length] = 0
                 # 填充位置信息
                 # self.dstar_path[i, path.shape[0] :, :] = path[-1, :]
                 self.turn_num[i] = turn_num
@@ -108,13 +120,7 @@ class SimEnv:
                 self.grid_map[i] = self.grid_map_orgin
                 self.distance[i] = 1000
 
-        return (
-            self.dstar_path,
-            self.path_mask,
-            self.distance,
-            self.turn_num,
-            max(path_list_length_list),
-        )
+        return (self.dstar_path, self.distance, self.turn_num, max_path_length)
 
     def update(self, action: np.ndarray):
         """
@@ -134,18 +140,18 @@ class SimEnv:
         self.grid_map[:] = self.grid_map_orgin
         for i in range(action.shape[0]):
             # i = tick_num
-            tmp: np.ndarray = self.dstar_path[i][
-                np.where(
-                    (action[i] == 1)
-                    & (np.logical_not(self.path_mask[i, : action[i].shape[0]]))
-                )[0]
+            tmp_obstacle: np.ndarray = self.dstar_path[i][
+                np.where((action[i, : self.path_length[i]] == 1))[0]
             ]
-            tmp = tmp.astype(np.int8)
-            if tmp.shape[0] > 0:
-                mask = np.any(tmp != self.start[i], axis=1) & np.any(
-                    tmp != self.goal[i], axis=1
+            tmp_stop: np.ndarray = self.dstar_path[i][
+                np.where(action[i, : self.path_length[i]] == 2)
+            ]
+            tmp_obstacle = tmp_obstacle.astype(np.int8)
+            if tmp_obstacle.shape[0] > 0:
+                mask = np.any(tmp_obstacle != self.start[i], axis=1) & np.any(
+                    tmp_obstacle != self.goal[i], axis=1
                 )
-                tmp = tmp[mask]
+                tmp_obstacle = tmp_obstacle[mask]
                 """ mask = np.any(tmp != self.goal[i], axis=1)
                 tmp = tmp[mask] """
 
@@ -156,8 +162,8 @@ class SimEnv:
                 if np.array_equal(row, self.goal[i]):
                     np.delete(tmp, row)
                     print("shabi1") """
-            self.grid_map[i][tmp[:, 0], tmp[:, 1]] = 1
-            obstacles_pos.append(tmp)
+            self.grid_map[i][tmp_obstacle[:, 0], tmp_obstacle[:, 1]] = 1
+            obstacles_pos.append(tmp_obstacle)
             # print(i)
             """ self.AGVs[tick_num].update_grid(self.grid_map[tick_num], obstacles_pos)
             self.AGVs[tick_num].visualize()
@@ -197,26 +203,16 @@ class SimEnv:
         """
         返回D*路线，掩膜，是否结束，奖励
         """
-        path_list, mask_list, distance, turn_num, max_path_length = (
-            self.get_DStar_Path()
-        )
+        path_list, distance, turn_num, max_path_length = self.get_DStar_Path()
 
         assert isinstance(path_list, np.ndarray), "必须返回numpy数组"
         # 第i个AGV的路径有这么多步
         # p = np.broadcast_to(aa, (path_length, aa.shape[0], aa.shape[1]))
         # aa = self.grid_map_orgin.copy()
-        self.grid_video = np.zeros(
-            (
-                self.agv_num,
-                max_path_length,
-                self.grid_map_orgin.shape[0],
-                self.grid_map_orgin.shape[1],
-            )
-        )
         for agv in range(self.agv_num):
             aa = np.expand_dims(self.grid_map_orgin, axis=0).astype(np.float32)
             # path_length = self.max_path_length - mask_list[agv].sum()
-            p = np.tile(aa, (max_path_length, 1, 1))
+            p = np.tile(aa, (self.max_frame_num, 1, 1))
             # p[:, path_coords[:, 0], path_coords[:, 1]] = 0.5
             for step in range(max_path_length):
                 for _agv in range(self.agv_num):
@@ -230,46 +226,48 @@ class SimEnv:
                             step, path_list[_agv, step, 0], path_list[_agv, step, 1]
                         ] += 0.8
             # 大于1.0就说明两车处于同一位置，就说明相撞了
-            self.grid_video[agv] = p
-
-        """ indice = (
-            np.arange(path_length),
-            path_list[0, :path_length, 0],
-            path_list[0, :path_length, 1],
-        ) """
+            self.grid_video[agv, 0] = p
         # p[indice] = 0.5
-        if max_path_length < self.frame_num:
+        # TODO 需要判断frame_num的数量，下次是否需要更新
+        if max_path_length < self.max_frame_num:
             pass
         # print(self.grid_video)
         # print(self.max_path_length - mask_list[1].sum())
-        reward = self.get_reward(distance, turn_num)
-        return path_list, mask_list, self.done, reward
+        reward: float = self.get_reward(distance, turn_num)
 
-    def get_reward(self, distance, turn_num):
+        return self.grid_video, self.done, reward
+
+    def get_reward(self, distance, turn_num) -> float:
         self.done = 0
         self.episode_step += 1
         if self.episode_step >= self.max_episode_step:
             self.done = 1
         # distance = 0
-        reward = self.Dstar_reward - sum(distance) - sum(turn_num) / 10
+        reward = -sum(distance) - sum(turn_num) / 10
         # TODO 这里可以优化为numpy
         conflict_num = []
         for frame in self.grid_video:
             filtered_elements = frame[(frame > 1.1)]
             conflict_num.append(np.sum(filtered_elements))
         # 出现路径冲突就扣分
-        reward -= max(conflict_num) * 5
+        reward -= max(conflict_num) * 4
+        logger.warning(f"冲突次数:{max(conflict_num):.2f}")
+        # 因为这两个都是负数
+        reward = reward - self.Dstar_reward
         if reward > -0.50:
             reward = (1 + reward) * 10
+
         return reward
 
-    def show(self, agv_num, obstacles_pos=[]):
+    def show(self, axs=None, obstacles_pos=[]):
+        agv_num = self.agv_num
         # plt.close("all")
-        fig, axs = plt.subplots(agv_num // 3 + 1, 3, figsize=(16, 9), dpi=90)
+        if axs is None:
+            fig, axs = plt.subplots(agv_num // 3 + 1, 3, figsize=(16, 9), dpi=90)
         plt.tight_layout()
         # plt.clf()
         axs[-1, -1].imshow(
-            self.grid_map_orgin,
+            self.grid_map_orgin.T,
             cmap="gray_r",
             origin="lower",
             interpolation="nearest",
@@ -277,7 +275,7 @@ class SimEnv:
         for i in range(agv_num):
             # 障碍物
             axs[i // 3, i % 3].imshow(
-                self.grid_map[i],
+                self.grid_map[i].T,
                 cmap="gray_r",
                 origin="lower",
                 interpolation="nearest",
@@ -328,7 +326,7 @@ if __name__ == "__main__":
     env.get_DStar_Path()
     print(env.get_state()[-1])
     print(env.get_state()[-1])
-    env.show(agv_num)
+    env.show()
     # print(env.dstar_path)
     # print(env.distance)
     # print(env.time)
